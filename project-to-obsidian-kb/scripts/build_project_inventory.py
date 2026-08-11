@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Create a read-only embedded-project inventory or a non-destructive Obsidian vault skeleton."""
+"""Inventory an embedded project and create a non-destructive linked Obsidian knowledge base."""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
-from collections import Counter
+import re
+from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Iterable
@@ -16,105 +18,219 @@ SKIP_DIRS = {
     "cmake-build-debug", "cmake-build-release", "dist", "out", "target",
     "Obsidian嵌入式知识库",
 }
-
 DOC_SUFFIXES = {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".html", ".htm"}
 HARDWARE_SUFFIXES = {".kicad_sch", ".kicad_pcb", ".sch", ".brd", ".pcbdoc", ".schdoc", ".bom", ".csv"}
-SOURCE_SUFFIXES = {".c", ".h", ".cpp", ".cxx", ".cc", ".hpp", ".s", ".S", ".py", ".ino", ".rs"}
+SOURCE_SUFFIXES = {".c", ".h", ".cpp", ".cxx", ".cc", ".hpp", ".s", ".py", ".ino", ".rs"}
+HEADER_SUFFIXES = {".h", ".hpp"}
+IMPLEMENTATION_SUFFIXES = {".c", ".cpp", ".cxx", ".cc", ".py", ".ino", ".rs"}
 CONFIG_SUFFIXES = {".ioc", ".syscfg", ".ld", ".sct", ".cfg", ".json", ".yaml", ".yml"}
 BUILD_FILENAMES = {
     "cmakelists.txt", "makefile", "platformio.ini", "package.json", "west.yml",
     "build.ps1", "flash.ps1", "validate.ps1", "build.bat", "flash.bat",
 }
+PROTECTED_PATH_PARTS = {
+    "drivers", "startup", "middleware", "middlewares", "cmsis", "hal", "ll", "sdk",
+    "third_party", "third-party", "vendor", "generated", "targetconfigs",
+}
+ENTRY_FILENAMES = {"main.c", "main.cpp", "main.py", "app_main.c", "app_main.cpp"}
 
 
 def relative(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
+def file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_text(path: Path) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            pass
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 def collect_files(root: Path) -> list[Path]:
     files: list[Path] = []
     for current, dirs, names in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
         base = Path(current)
-        for name in names:
-            candidate = base / name
-            if candidate.is_file():
-                files.append(candidate)
-    return sorted(files, key=lambda p: relative(p, root).lower())
+        files.extend(base / name for name in names if (base / name).is_file())
+    return sorted(files, key=lambda path: relative(path, root).lower())
 
 
 def find_named(files: Iterable[Path], root: Path, names: set[str], limit: int = 80) -> list[str]:
-    found = [relative(p, root) for p in files if p.name.lower() in names]
-    return found[:limit]
+    return [relative(path, root) for path in files if path.name.lower() in names][:limit]
 
 
-def find_suffixes(files: Iterable[Path], root: Path, suffixes: set[str], limit: int = 200) -> list[str]:
-    found = [relative(p, root) for p in files if p.suffix.lower() in suffixes]
-    return found[:limit]
+def find_suffixes(files: Iterable[Path], root: Path, suffixes: set[str], limit: int = 240) -> list[str]:
+    return [relative(path, root) for path in files if path.suffix.lower() in suffixes][:limit]
 
 
 def detect_stack(files: list[Path], root: Path) -> list[dict[str, object]]:
-    names = {p.name.lower() for p in files}
-    paths = {relative(p, root).lower() for p in files}
+    paths = {relative(path, root).lower() for path in files}
     results: list[dict[str, object]] = []
 
     def add(name: str, evidence: list[str]) -> None:
         if evidence:
-            results.append({"name": name, "evidence": evidence})
+            results.append({"name": name, "evidence": evidence[:20]})
 
-    add("STM32 / STM32CubeMX", [p for p in paths if p.endswith(".ioc")][:20])
-    add("TI MSPM0 / SysConfig", [p for p in paths if p.endswith(".syscfg")][:20])
-    add("PlatformIO", [p for p in paths if p.endswith("platformio.ini")][:20])
-    add("CMake", [p for p in paths if p.endswith("cmakelists.txt")][:20])
-    add("Arduino", [p for p in paths if p.endswith(".ino")][:20])
-    add("Zephyr / west", [p for p in paths if p.endswith("west.yml") or "zephyr" in p][:20])
-    add("ESP-IDF", [p for p in paths if p.endswith("idf_component.yml") or p.endswith("sdkconfig") or "sdkconfig." in p or "/managed_components/" in p][:20])
-    add("K230 / CanMV", [p for p in paths if "k230" in p or "canmv" in p or p.endswith(".kmodel")][:20])
-    add("KiCad", [p for p in paths if p.endswith(".kicad_sch") or p.endswith(".kicad_pcb")][:20])
-    add("Altium Designer", [p for p in paths if p.endswith(".schdoc") or p.endswith(".pcbdoc")][:20])
-
+    add("STM32 / STM32CubeMX", [path for path in paths if path.endswith(".ioc")])
+    add("TI MSPM0 / SysConfig", [path for path in paths if path.endswith(".syscfg")])
+    add("PlatformIO", [path for path in paths if path.endswith("platformio.ini")])
+    add("CMake", [path for path in paths if path.endswith("cmakelists.txt")])
+    add("Arduino", [path for path in paths if path.endswith(".ino")])
+    add("Zephyr / west", [path for path in paths if path.endswith("west.yml") or "zephyr" in path])
+    add("ESP-IDF", [path for path in paths if path.endswith("idf_component.yml") or "/components/" in path])
+    add("K230 / CanMV", [path for path in paths if "k230" in path or "canmv" in path or path.endswith(".kmodel")])
+    add("KiCad", [path for path in paths if path.endswith(".kicad_sch") or path.endswith(".kicad_pcb")])
+    add("Altium Designer", [path for path in paths if path.endswith(".schdoc") or path.endswith(".pcbdoc")])
     if not results:
-        add("待人工确认", ["未找到可识别的工程标记；请检查根目录、构建文件和平台说明。"])
+        results.append({"name": "待人工确认", "evidence": ["未找到可识别的工程标记；请检查根目录、构建文件和平台说明。"]})
     return results
+
+
+def classify_module(stem: str, paths: list[Path], root: Path) -> tuple[str, str]:
+    lowered_stem = stem.lower()
+    lowered_parts = {part.lower() for path in paths for part in path.parts}
+    names = {path.name.lower() for path in paths}
+    if names & ENTRY_FILENAMES:
+        return "应用入口/项目编排", "项目专用：供 AI 理解控制流，不建议直接复制为独立模块"
+    if lowered_parts & PROTECTED_PATH_PARTS:
+        return "厂商或自动生成依赖", "仅索引：不要擅自改动或抽离；通过项目配置和官方资料确认边界"
+    keyword_map = {
+        "控制算法": ("pid", "filter", "kalman", "control", "trajectory"),
+        "执行器控制": ("motor", "pwm", "servo", "stepper", "encoder", "gimbal"),
+        "通信与协议": ("uart", "usart", "i2c", "spi", "can", "protocol", "frame", "ring", "serial"),
+        "传感器与采样": ("adc", "imu", "sensor", "huidu", "gray", "camera", "vision"),
+        "显示与人机交互": ("oled", "lcd", "display", "key", "button", "buzzer"),
+        "系统服务": ("timer", "tick", "delay", "watchdog", "freertos", "queue", "task"),
+    }
+    for module_type, keywords in keyword_map.items():
+        if any(keyword in lowered_stem for keyword in keywords):
+            return module_type, "候选可复用模块：先阅读依赖、配置和调用方，再独立构建/上板验证"
+    return "项目功能模块", "候选可复用模块：需人工确认职责、外部依赖和最小运行条件"
+
+
+def parse_includes(text: str) -> list[str]:
+    values = re.findall(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', text, flags=re.MULTILINE)
+    return sorted(dict.fromkeys(values))[:80]
+
+
+def parse_public_api(text: str) -> list[str]:
+    results: list[str] = []
+    joined = re.sub(r'\\\n', ' ', text)
+    pattern = re.compile(
+        r'^\s*(?:extern\s+)?(?:static\s+)?[A-Za-z_][\w\s\*]*?\s+([A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*;',
+        flags=re.MULTILINE,
+    )
+    for match in pattern.finditer(joined):
+        name = match.group(1)
+        if name in {"if", "while", "for", "switch"}:
+            continue
+        signature = re.sub(r'\s+', ' ', match.group(0).strip())
+        results.append(signature)
+    return list(dict.fromkeys(results))[:60]
+
+
+def parse_defined_functions(text: str) -> list[str]:
+    pattern = re.compile(
+        r'^\s*(?:static\s+)?[A-Za-z_][\w\s\*]*?\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{',
+        flags=re.MULTILINE,
+    )
+    values = [match.group(1) for match in pattern.finditer(text)]
+    return list(dict.fromkeys(values))[:80]
+
+
+def safe_note_name(value: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|#\[\]]', '_', value).strip('. ')
+    return cleaned or "未命名模块"
+
+
+def detect_modules(files: list[Path], root: Path) -> list[dict[str, object]]:
+    grouped: dict[str, list[Path]] = defaultdict(list)
+    for path in files:
+        if path.suffix.lower() in SOURCE_SUFFIXES:
+            grouped[path.stem.lower()].append(path)
+
+    modules: list[dict[str, object]] = []
+    for stem, paths in sorted(grouped.items()):
+        paths = sorted(paths, key=lambda item: relative(item, root).lower())
+        module_type, reuse_status = classify_module(stem, paths, root)
+        header_paths = [path for path in paths if path.suffix.lower() in HEADER_SUFFIXES]
+        implementation_paths = [path for path in paths if path.suffix.lower() in IMPLEMENTATION_SUFFIXES]
+        includes: list[str] = []
+        api: list[str] = []
+        defined: list[str] = []
+        readable_paths = [path for path in paths if path.stat().st_size <= 512 * 1024]
+        for path in readable_paths:
+            content = read_text(path)
+            includes.extend(parse_includes(content))
+            if path in header_paths:
+                api.extend(parse_public_api(content))
+            if path in implementation_paths:
+                defined.extend(parse_defined_functions(content))
+        modules.append({
+            "name": stem,
+            "note_name": safe_note_name(stem),
+            "module_type": module_type,
+            "reuse_status": reuse_status,
+            "source_files": [relative(path, root) for path in paths],
+            "header_files": [relative(path, root) for path in header_paths],
+            "implementation_files": [relative(path, root) for path in implementation_paths],
+            "direct_includes": sorted(dict.fromkeys(includes))[:80],
+            "public_api": list(dict.fromkeys(api))[:60],
+            "defined_functions": list(dict.fromkeys(defined))[:80],
+            "source_sha256": {relative(path, root): file_hash(path) for path in paths},
+        })
+    return modules
 
 
 def summarize(root: Path) -> dict[str, object]:
     files = collect_files(root)
-    suffix_count = Counter((p.suffix.lower() or "[无后缀]") for p in files)
-    directories = sorted({relative(p.parent, root) for p in files if p.parent != root})
-    documentation = find_suffixes(files, root, DOC_SUFFIXES)
-    hardware = find_suffixes(files, root, HARDWARE_SUFFIXES)
-    source = find_suffixes(files, root, SOURCE_SUFFIXES)
-    configs = find_suffixes(files, root, CONFIG_SUFFIXES)
-    markers = find_named(files, root, {"readme.md", "agents.md", ".任务上下文.md"})
-    build_files = find_named(files, root, BUILD_FILENAMES)
+    suffix_count = Counter((path.suffix.lower() or "[无后缀]") for path in files)
     return {
         "generated_at": date.today().isoformat(),
         "project_root": str(root),
         "file_count": len(files),
-        "directories": directories[:240],
+        "directories": sorted({relative(path.parent, root) for path in files if path.parent != root})[:240],
         "suffix_count": dict(sorted(suffix_count.items())),
-        "project_markers": markers,
-        "build_files": build_files,
+        "project_markers": find_named(files, root, {"readme.md", "agents.md", ".任务上下文.md"}),
+        "build_files": find_named(files, root, BUILD_FILENAMES),
         "stack_candidates": detect_stack(files, root),
-        "source_files": source,
-        "configuration_files": configs,
-        "hardware_files": hardware,
-        "document_files": documentation,
+        "source_files": find_suffixes(files, root, SOURCE_SUFFIXES),
+        "configuration_files": find_suffixes(files, root, CONFIG_SUFFIXES),
+        "hardware_files": find_suffixes(files, root, HARDWARE_SUFFIXES),
+        "document_files": find_suffixes(files, root, DOC_SUFFIXES),
+        "modules": detect_modules(files, root),
     }
 
 
 def bullet_list(items: Iterable[str], empty: str = "- 未发现；待确认。") -> str:
     values = list(items)
-    return "\n".join(f"- `{x}`" for x in values) if values else empty
+    return "\n".join(f"- `{item}`" for item in values) if values else empty
 
 
 def stack_table(items: list[dict[str, object]]) -> str:
     rows = ["| 技术栈候选 | 文件证据 |", "|---|---|"]
     for item in items:
-        evidence = "<br>".join(f"`{x}`" for x in item["evidence"])
+        evidence = "<br>".join(f"`{value}`" for value in item["evidence"])
         rows.append(f"| {item['name']} | {evidence} |")
     return "\n".join(rows)
+
+
+def module_table(modules: list[dict[str, object]]) -> str:
+    rows = ["| 模块 | 自动分类 | 复用边界 | 源文件 |", "|---|---|---|"]
+    for module in modules:
+        files = "<br>".join(f"`{item}`" for item in module["source_files"])
+        rows.append(f"| [[../60_可复用代码与工程模板/代码模块/{module['note_name']}代码模块|{module['name']}]] | {module['module_type']} | {module['reuse_status']} | {files} |")
+    return "\n".join(rows) if len(rows) > 2 else "- 未发现可识别的源码模块；待确认。"
 
 
 def report_markdown(data: dict[str, object]) -> str:
@@ -128,7 +244,7 @@ created: {data['generated_at']}
 
 # 工程只读扫描报告
 
-> 本报告仅根据目录名、文件名和扩展名生成；不读取源码语义，不代表构建、烧录、上板或硬件验证成功。
+> 本报告根据文件树和有限源码结构提取生成；自动模块分类、函数列表和依赖仅作 AI 阅读入口，不代表完成解耦、独立构建或硬件验证。
 
 ## 扫描范围
 
@@ -148,6 +264,10 @@ created: {data['generated_at']}
 
 {stack_table(data['stack_candidates'])}
 
+## 自动识别的代码模块
+
+{module_table(data['modules'])}
+
 ## 硬件/EDA 文件候选
 
 {bullet_list(data['hardware_files'])}
@@ -158,9 +278,9 @@ created: {data['generated_at']}
 
 ## 待确认
 
-- 确认实际芯片型号、开发板版本、封装、供电、电平和调试接口。
-- 阅读真实构建脚本、原理图、BOM 和手册后，再补充接口关系。
+- 自动模块边界按同名源文件/头文件和文件名启发式生成；阅读源码、调用方和构建配置后再确认。
 - 仅转换与当前工程直接相关的资料，不要批量转换整个资料目录。
+- 只有独立构建、目标板验证或稳定复用记录才能提升可信等级。
 """
 
 
@@ -172,19 +292,95 @@ def write_generated(path: Path, content: str, overwrite: bool) -> bool:
     return True
 
 
+def markdown_source_link(source: Path, note_path: Path) -> str:
+    return os.path.relpath(source, start=note_path.parent).replace("\\", "/")
+
+
+def module_note(module: dict[str, object], root: Path, note_path: Path, generated_at: str) -> str:
+    source_files = [root / value for value in module["source_files"]]
+    source_links = "\n".join(
+        f"- [{relative(source, root)}]({markdown_source_link(source, note_path)})" for source in source_files
+    )
+    api = "\n".join(f"- `{item}`" for item in module["public_api"]) or "- 未从头文件解析到函数声明；先阅读源文件和调用方。"
+    defined = "\n".join(f"- `{item}`" for item in module["defined_functions"]) or "- 未自动解析到函数定义；待人工确认。"
+    includes = "\n".join(f"- `{item}`" for item in module["direct_includes"]) or "- 未解析到显式 include，或文件未读取。"
+    source_reading = "\n- 默认不复制完整源码。AI 应按上方相对链接读取原工程文件；跨环境交接时应连同原工程交付，或手动摘录必要片段并标注来源和 SHA256。"
+    return f"""---
+type: 代码模块
+status: 自动盘点，待人工确认
+trust_level: L0
+module_type: {module['module_type']}
+source_path: {module['source_files'][0] if module['source_files'] else '.'}
+source_files:
+{chr(10).join('  - ' + item for item in module['source_files'])}
+interfaces: [{', '.join(module['defined_functions'][:12])}]
+verified_compile: false
+verified_hardware: false
+reuse_status: {module['reuse_status']}
+created: {generated_at}
+---
+
+# {module['name']} 代码模块
+
+> 本页是从现有工程提取的**参照模块卡**，不是已经独立构建的模板。保留原工程为黄金基线；抽取或修改前先读源文件、调用方、构建配置和硬件约束。
+
+## 功能与复用边界
+
+- 自动分类：{module['module_type']}
+- 当前建议：{module['reuse_status']}
+- 不要因文件名、源码摘录或本页存在就假定接口、引脚和硬件行为已验证。
+
+## 原工程文件
+
+{source_links}
+
+## 对外 API 候选（来自头文件）
+
+{api}
+
+## 源文件中函数定义候选
+
+{defined}
+
+## 直接 include 依赖
+
+{includes}
+
+## AI 阅读与复用顺序
+
+1. 先读本页列出的头文件，确认公共 API、数据结构和宏。
+2. 再读实现文件和调用方，确认初始化顺序、中断/任务上下文、全局变量和错误路径。
+3. 检查 `.ioc`、`.syscfg`、构建脚本、PinMux、原理图和 BSP/HAL 依赖；不要只复制单个 `.c/.h` 文件。
+4. 若要迁移，先复制到新工程的 `App/` 或 `BSP/` 边界，补齐最小依赖并独立构建；上板前保持执行器安全状态。
+5. 在本页补充实际功能、最小依赖、移植限制、构建/上板记录后，才可提升可信等级。
+
+## 源码可读性入口
+{source_reading}
+
+## 待人工补充
+
+- 实际功能、输入/输出、单位、时序和异常安全状态；
+- 最小依赖与禁止耦合的项目专用部分；
+- 独立构建、目标板和整机验证记录；
+- 是否应沉淀为真正的模板仓库模块。
+"""
+
+
+
 def vault_files(data: dict[str, object]) -> dict[str, str]:
     today = data["generated_at"]
     stack = stack_table(data["stack_candidates"])
+    modules = module_table(data["modules"])
     return {
         "README.md": """# 项目 Obsidian 嵌入式知识库
 
-> 本知识库由 `project-to-obsidian-kb` 基于原工程只读扫描创建。原工程保持不变；本目录保存索引、项目决策、资料来源、验证边界和故障经验。
+> 本知识库由 `project-to-obsidian-kb` 基于原工程只读盘点创建。原工程保持不变；本目录保存链接、模块参照、资料来源、验证边界和故障经验。
 
 - [[00_总览/项目总览|项目总览]]
 - [[00_总览/扫描清单|扫描清单]]
 - [[10_嵌入式工程/工程结构|工程结构]]
-- [[10_嵌入式工程/构建烧录与配置|构建烧录与配置]]
-- [[20_芯片与开发板/芯片与开发板索引|芯片与开发板索引]]
+- [[10_嵌入式工程/代码模块索引|代码模块索引]]
+- [[60_可复用代码与工程模板/README|可复用模块参照]]
 - [[98_资料索引/资料清单|资料清单]]
 - [[99_待确认/待确认|待确认]]
 """,
@@ -199,16 +395,16 @@ verification_scope: 未验证
 
 # 项目总览
 
-> 本页仅关联原工程的扫描证据；需要阅读源码、构建脚本和硬件资料后再补充真实结论。
+> 本页关联原工程扫描证据和模块参照。需要阅读源码、构建脚本和硬件资料后再补充真实结论。
 
 ## 导航
 
 - [[扫描清单]]
 - [[../10_嵌入式工程/工程结构|工程结构]]
+- [[../10_嵌入式工程/代码模块索引|代码模块索引]]
 - [[../10_嵌入式工程/构建烧录与配置|构建烧录与配置]]
+- [[../60_可复用代码与工程模板/README|可复用模块参照]]
 - [[../20_芯片与开发板/芯片与开发板索引|芯片与开发板索引]]
-- [[../30_硬件模块与接口/硬件资料候选|硬件资料候选]]
-- [[../50_项目记录与验证/验证状态|验证状态]]
 - [[../98_资料索引/资料清单|资料清单]]
 - [[../99_待确认/待确认|待确认]]
 
@@ -219,7 +415,7 @@ verification_scope: 未验证
 ## 当前边界
 
 - 原工程未被本 Skill 修改。
-- 扫描结果不是构建或上板证据。
+- 模块卡仅提供 AI 阅读与迁移入口，不证明模块已解耦或已验证。
 - 具体芯片、板卡、接口和验证状态均待结合原始资料确认。
 """,
         "00_总览/扫描清单.md": report_markdown(data),
@@ -241,7 +437,31 @@ created: {today}
 
 {bullet_list(data['source_files'])}
 
-> 以上来自文件树。模块职责、任务调度、中断关系和公共接口需阅读源码后再填写。
+> 以上来自文件树。模块职责、任务调度、中断关系和公共接口需结合 [[代码模块索引]]、构建配置和源文件确认。
+""",
+        "10_嵌入式工程/代码模块索引.md": f"""---
+type: 工程代码模块索引
+status: 自动盘点，待人工确认
+trust_level: L0
+source_path: .
+created: {today}
+---
+
+# 代码模块索引
+
+> 此索引把现有工程按同名源文件/头文件聚合为 AI 可阅读的参照模块。它不会移动源码，也不表示已经完成物理拆分或独立构建。
+
+## 模块地图
+
+{modules}
+
+## 使用方式
+
+1. 先从模块卡进入，读取其原工程相对链接、API 候选和 include 依赖。
+2. 抽取可复用代码时，先保留当前工程黄金基线；在新工程副本中单独构建，不直接剪切原项目文件。
+3. 入口文件、自动生成文件、SDK 和厂商库通常只用于理解依赖边界，禁止直接当成通用模块复制。
+
+相关入口：[[../60_可复用代码与工程模板/README|可复用模块参照]]、[[构建烧录与配置]]、[[../50_项目记录与验证/验证状态|验证状态]]。
 """,
         "10_嵌入式工程/构建烧录与配置.md": f"""---
 type: 构建烧录配置索引
@@ -321,7 +541,7 @@ verification_scope: 未执行
 
 | 范围 | 当前证据 | 结论 |
 |---|---|---|
-| 资料参考 | 文件树扫描 | L0：仅存在候选资料 |
+| 资料参考 | 文件树和源码结构扫描 | L0：仅存在候选资料/模块 |
 | 本机构建 | 未执行 | 待确认 |
 | 烧录 | 未执行 | 待确认 |
 | 目标板 | 未执行 | 待确认 |
@@ -329,7 +549,34 @@ verification_scope: 未执行
 
 > 后续记录实际命令、日志、板卡版本、接线、测试条件和结果；不要跨范围升级结论。
 """,
-        "60_故障排查与经验/README.md": """# 故障排查与经验
+        "60_可复用代码与工程模板/README.md": """# 可复用代码与工程模板参照
+
+> 这里不是从原工程移动出来的独立模板库，而是面向 AI 阅读和后续抽取的模块参照层。每个模块卡都链接回原工程；先确认依赖、最小构建条件和验证记录，再在新工程副本中复用。
+
+- [[代码模块/README|代码模块列表]]
+- [[工程参考|工程参考与抽取规则]]
+""",
+        "60_可复用代码与工程模板/代码模块/README.md": """# 代码模块列表
+
+> 模块页由工程扫描生成。它们默认是 L0 参照，不代表已成为独立模板。
+
+请从 [[../../10_嵌入式工程/代码模块索引|代码模块索引]] 进入对应模块卡。
+""",
+        "60_可复用代码与工程模板/工程参考.md": """---
+type: 工程参照与模块抽取规则
+status: 使用中
+trust_level: L0
+---
+
+# 工程参照与模块抽取规则
+
+1. 原工程是黄金基线，先读模块卡、头文件、实现、调用方和构建配置。
+2. 不从原工程直接剪切或删除代码；复制到新工程/模板候选目录后再解耦。
+3. 拆分时明确公共 API、数据所有权、中断/任务上下文、HAL/BSP 依赖、配置依赖和硬件安全状态。
+4. 先完成独立构建，再进行最小板级验证；分别记录 L1、L2 和 L3 证据。
+5. 入口文件、厂商 SDK、启动文件、链接脚本、`.ioc`、`.syscfg` 和自动生成文件默认不作为可复用模块自动迁移。
+""",
+        "80_故障排查与经验/README.md": """# 故障排查与经验
 
 > 仅记录已经发生、可复现且对后续项目有帮助的问题。当前未从文件树推断任何故障。
 """,
@@ -363,16 +610,17 @@ verification_scope: 未验证
 
 # 待确认
 
+- 自动模块边界、实际功能和可复用范围。
 - 目标 MCU 与实际开发板型号、版本、封装。
 - 构建、烧录、调试工具链和入口命令。
 - 供电、电平、引脚复用、板级占用和接口方向。
 - 资料版本、原理图/BOM 完整性和冲突项。
-- 本机构建、目标板和整机功能的实际验证记录。
+- 模块独立构建、目标板和整机功能的实际验证记录。
 """,
     }
 
 
-def create_vault(root: Path, output: Path, data: dict[str, object], overwrite: bool, dry_run: bool = False) -> list[str]:
+def create_vault(root: Path, output: Path, data: dict[str, object], overwrite: bool) -> list[str]:
     try:
         output.relative_to(root)
     except ValueError as error:
@@ -383,17 +631,19 @@ def create_vault(root: Path, output: Path, data: dict[str, object], overwrite: b
     written: list[str] = []
     for rel_path, content in vault_files(data).items():
         target = output / rel_path
-        if dry_run:
-            action = "覆盖" if target.exists() else "新建"
-            written.append(f"[{action}] {rel_path}")
-            continue
         if write_generated(target, content, overwrite):
             written.append(relative(target, output))
+
+    module_root = output / "60_可复用代码与工程模板" / "代码模块"
+    for module in data["modules"]:
+        note_path = module_root / f"{module['note_name']}代码模块.md"
+        content = module_note(module, root, note_path, data["generated_at"])
+        if write_generated(note_path, content, overwrite):
+            written.append(relative(note_path, output))
+
     inventory_path = output / "00_总览" / "inventory.json"
-    if dry_run:
-        action = "覆盖" if inventory_path.exists() else "新建"
-        written.append(f"[{action}] {relative(inventory_path, output)}")
-    elif not inventory_path.exists() or overwrite:
+    if not inventory_path.exists() or overwrite:
+        inventory_path.parent.mkdir(parents=True, exist_ok=True)
         inventory_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         written.append(relative(inventory_path, output))
     return written
@@ -403,10 +653,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", default=".", help="当前工程根目录；默认当前目录。")
     parser.add_argument("--report", help="只读扫描报告输出路径；不创建知识库。")
-    parser.add_argument("--create", action="store_true", help="创建项目内的 Obsidian 知识库骨架。")
+    parser.add_argument("--create", action="store_true", help="创建项目内的 Obsidian 知识库骨架和模块卡。")
     parser.add_argument("--output", help="知识库输出目录；默认 PROJECT_ROOT/Obsidian嵌入式知识库。")
     parser.add_argument("--overwrite-generated", action="store_true", help="覆盖已存在的生成笔记；使用前先人工检查差异。")
-    parser.add_argument("--dry-run", action="store_true", help="只列出将新建/覆盖的文件，不写入任何内容；需与 --create 一起使用。")
     args = parser.parse_args()
 
     root = Path(args.project_root).resolve()
@@ -414,8 +663,6 @@ def main() -> int:
         parser.error(f"PROJECT_ROOT 不存在或不是目录：{root}")
     if not args.report and not args.create:
         parser.error("至少指定 --report 或 --create。")
-    if args.dry_run and not args.create:
-        parser.error("--dry-run 需要与 --create 一起使用。")
 
     data = summarize(root)
     if args.report:
@@ -426,15 +673,9 @@ def main() -> int:
 
     if args.create:
         output = Path(args.output).resolve() if args.output else root / "Obsidian嵌入式知识库"
-        if args.dry_run:
-            plan = create_vault(root, output, data, args.overwrite_generated, dry_run=True)
-            print(f"[计划] 输出目录：{output}")
-            print(f"[计划] 将新建/覆盖文件数量：{len(plan)}")
-            for item in plan:
-                print(f"  - {item}")
-            return 0
         written = create_vault(root, output, data, args.overwrite_generated)
         print(f"[OK] 知识库目录：{output}")
+        print(f"[OK] 识别模块数量：{len(data['modules'])}")
         print(f"[OK] 新建/更新文件数量：{len(written)}")
         for item in written:
             print(f"  + {item}")
