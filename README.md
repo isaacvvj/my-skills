@@ -16,10 +16,11 @@ my-skills/
 │       ├── 板级接口模板.md
 │       ├── 供电调试启动模板.md
 │       └── 总索引模板.md
-├── project-to-obsidian-kb/        # 工程转 Obsidian 嵌入式知识库
+├── project-to-obsidian-kb/        # 工程工作区转工程库与 Obsidian 知识库
 │   ├── SKILL.md                   # 技能主文件
+│   ├── README.md                  # 技能说明
 │   ├── agents/                    # 界面信息
-│   ├── scripts/                   # 盘点与转换脚本
+│   ├── scripts/                   # 扫描、归档与转换脚本
 │   └── references/                # 输出契约、模块抽取与蒸馏约束
 │       ├── board-distillation.md
 │       ├── module-extraction.md
@@ -33,7 +34,7 @@ my-skills/
 | Skill | 说明 | 状态 |
 |---|---|---|
 | [board-manual-distiller](board-manual-distiller/) | 板卡手册与引脚资料蒸馏器：将 MCU 数据手册/原理图/Wiki 蒸馏为结构化 Obsidian Markdown 档案（主档案+PinMux+板级接口三层结构） | ✅ v1.0 |
-| [project-to-obsidian-kb](project-to-obsidian-kb/) | 工程转 Obsidian 嵌入式知识库：扫描嵌入式/机器人/固件/硬件工程，构建工程参照层与可复用候选层，生成模块卡、API 索引和板卡蒸馏笔记，不修改原工程文件 | ✅ v1 |
+| [project-to-obsidian-kb](project-to-obsidian-kb/) | 工程工作区转工程库与 Obsidian 知识库：识别多子项目与技术栈证据，归档完整工程并 SHA256 校验，生成语义模块与硬件资料蒸馏索引，不修改原工程文件 | ✅ v1 |
 
 ## 如何添加新 Skill
 
