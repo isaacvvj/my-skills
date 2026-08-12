@@ -33,7 +33,7 @@ my-skills/
 | Skill | 说明 | 状态 |
 |---|---|---|
 | [board-manual-distiller](board-manual-distiller/) | 板卡手册与引脚资料蒸馏器：将 MCU 数据手册/原理图/Wiki 蒸馏为结构化 Obsidian Markdown 档案（主档案+PinMux+板级接口三层结构） | ✅ v1.0 |
-| [project-to-obsidian-kb](project-to-obsidian-kb/) | 工程转 Obsidian 嵌入式知识库：扫描嵌入式/机器人/固件/硬件工程，构建工程参照层与可复用候选层，生成模块卡、API 索引和板卡蒸馏笔记，不修改原工程文件 | ✅ v2.0 |
+| [project-to-obsidian-kb](project-to-obsidian-kb/) | 工程转 Obsidian 嵌入式知识库：扫描嵌入式/机器人/固件/硬件工程，构建工程参照层与可复用候选层，生成模块卡、API 索引和板卡蒸馏笔记，不修改原工程文件 | ✅ v1 |
 
 ## 如何添加新 Skill
 
