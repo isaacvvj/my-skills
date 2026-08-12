@@ -1,4 +1,4 @@
 interface:
   display_name: "工程库与知识库构建"
-  short_description: "从真实嵌入式工程构建双库、聚合导航并主动蒸馏硬件资料"
-  default_prompt: "Use $project-to-obsidian-kb to scan the current embedded project, create a linked engineering library and Obsidian knowledge base, then proactively distill relevant hardware manuals without modifying source files."
+  short_description: "从真实嵌入式工作区构建工程归档、模板候选与知识库索引"
+  default_prompt: "Use $project-to-obsidian-kb to scan the current embedded workspace, stage verified project archives, build linked engineering and knowledge libraries, and proactively distill relevant hardware manuals."
