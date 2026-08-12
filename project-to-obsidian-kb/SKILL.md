@@ -1,152 +1,175 @@
 ---
 name: project-to-obsidian-kb
-description: Build or incrementally organize a linked Obsidian knowledge base from the real contents of the current embedded, robotics, firmware, hardware, or edge-AI project. Use when Codex must first inspect an existing project, map its source into reusable-reference modules for AI reading, document build/configuration/hardware evidence, convert selected manuals to Markdown, or distill MCU and board records without changing the original project.
+description: Build or incrementally organize a linked embedded engineering library and Obsidian knowledge base from the real contents of the current firmware, robotics, hardware, or edge-AI project. Use when Codex must inspect an existing project, keep source code out of Obsidian, create a connected project map and reusable-module index, proactively convert and distill project manuals or hardware documents, or record build and board-verification evidence without modifying the original project.
 ---
 
-# 工程转 Obsidian 嵌入式知识库
+# 工程转嵌入式工程库与 Obsidian 知识库
 
-将当前工程变成两层可追溯的 AI 工作上下文：
+对当前工程建立三个明确层次：
 
 ```text
-原工程（唯一黄金基线，保留不动）
-├── 工程参照层：结构、构建、配置、调用关系、模块入口
-└── 可复用候选层：模块卡、API、依赖、复用边界、验证状态
+原工程（唯一黄金基线，绝不自动修改）
+├── 嵌入式工程库（工程参照、模块机器清单、模板候选入口；不自动剪切代码）
+└── Obsidian嵌入式知识库（导航、资料蒸馏、决策、验证、故障；不存完整源码）
 ```
 
-这不是按目录复制代码，也不是把现有工程物理拆散。它应让 AI 能先定位到某个模块，再沿模块卡中的相对链接阅读原工程的 `.c/.h/.cpp/.py` 文件，并理解该模块能否安全迁移。
+目标不是批量生成很多孤立笔记，而是建立少量**中心导航页**，让 AI 能沿着链接进入原工程、工程库清单、硬件资料和验证记录。
 
 ## 强制边界
 
-- 从当前目录向上定位 `PROJECT_ROOT`；使用 `README.md`、`AGENTS.md`、`.git`、构建文件、源码目录和硬件资料证明判断。
-- 写入前必须先完成只读盘点并给出计划。没有明确写入授权时，停在计划阶段。
-- 只在 `PROJECT_ROOT\Obsidian嵌入式知识库` 写入；不要修改、移动、删除、重命名或覆盖原工程。
-- 读取并尊重项目中的 `README.md`、`AGENTS.md`、任务上下文、构建/烧录脚本、原理图、BOM、接口约束和版本说明。文件缺失时明确说明。
-- 不从文件名、记忆或 AI 推测补全芯片、引脚、电平、供电、模块功能或验证状态。
-- 代码笔记只保留摘要、API、依赖、关键函数签名和原工程链接；默认不复制完整源码。原工程仍是 AI 参照的唯一基线。
-- 资料/源码存在只表示 L0 参考；构建、上板和整机验证必须分开记录。
+- 从当前目录向上确定 `PROJECT_ROOT`；以 `README.md`、`AGENTS.md`、`.git`、构建配置、源码目录和硬件资料为依据。
+- 先只读扫描、阅读项目关键文件并输出计划；没有写入授权时停止在计划阶段。
+- 只在 `PROJECT_ROOT\嵌入式工程库` 和 `PROJECT_ROOT\Obsidian嵌入式知识库` 写入。
+- 不修改、移动、删除、重命名或覆盖原工程源码、配置、构建脚本、SDK、原理图、PCB、BOM 或资料源文件。
+- 原工程代码不复制到 Obsidian。知识库仅保存摘要、API/依赖候选、关键结论和指向真实源文件的链接。
+- 所有扫描、源码、手册和原理图结论默认 `trust_level: L0`；构建、上板、整机和稳定复用必须分开记录。
 
-## 一、只读盘点与计划
+## 一、只读发现与计划
 
-1. 确定 `PROJECT_ROOT`，只扫描它及子目录；识别子项目并分别建立索引。
-2. 阅读而不是只列出以下实际文件：
-   - `README.md`、`AGENTS.md`、项目说明和实验/故障记录；
-   - 构建、烧录、调试脚本和依赖配置；
-   - `.ioc`、`.syscfg`、`CMakeLists.txt`、`Makefile`、`platformio.ini` 等；
-   - 原理图、PCB、BOM、接线说明、数据手册和引脚资料。
-3. 执行盘点脚本，先得到文件树、技术栈候选和**代码模块候选**：
+1. 确定 `PROJECT_ROOT`，只扫描该目录与子目录；识别子项目，分别记录来源。
+2. 阅读项目实际存在的：
+   - `README.md`、`AGENTS.md`、任务上下文、项目说明、实验/故障记录；
+   - 构建、烧录、调试、验证脚本和依赖配置；
+   - `CMakeLists.txt`、`Makefile`、`platformio.ini`、`.ioc`、`.syscfg` 等；
+   - 原理图、PCB、BOM、接线说明、PDF、开发板资料和数据手册。
+3. 运行只读盘点：
 
 ```powershell
 python scripts/build_project_inventory.py --project-root <PROJECT_ROOT> --report <临时报告路径>
 ```
 
-4. 输出简短计划，至少说明：工程根目录、识别依据、拟创建笔记、可复用候选模块、受保护/生成文件、资料转换范围、风险、验证和回退方式。
+4. 输出计划：工程根目录和证据、拟创建的双库目录、聚合模块清单、待蒸馏资料、风险、验证方式和回退方式。
 
-脚本使用同名源文件/头文件、显式 `#include`、函数声明和实现名生成模块候选。它只是阅读入口；模块职责、并发上下文和复用范围必须结合真实代码与调用方确认。
+脚本的模块识别仅用于阅读入口；函数指针、宏、跨文件全局变量、中断、RTOS、DMA、PinMux 和硬件状态必须由 Agent 阅读真实工程后确认。
 
-## 二、创建工程参照层和可复用候选层
+## 二、同时创建工程库与知识库
 
-获得授权后运行：
+经授权后运行：
 
 ```powershell
 python scripts/build_project_inventory.py --project-root <PROJECT_ROOT> --create
 ```
 
-默认创建的核心目录如下；根据实际项目增量扩展，空目录可不创建：
+默认输出：
 
 ```text
-Obsidian嵌入式知识库/
-├── 00_总览/                    # 项目总览、技术栈、扫描报告、协作规则
-├── 10_嵌入式工程/              # 工程结构、配置、构建和代码模块地图
-├── 20_芯片与开发板/
-├── 30_硬件模块与接口/
-├── 50_项目记录与验证/
-├── 60_可复用代码与工程模板/    # 参照模块卡，不移动原代码
-├── 60_故障排查与经验/
-├── 98_资料索引/
-└── 99_待确认/
+PROJECT_ROOT/
+├── 原工程文件……                       # 完全保留
+├── 嵌入式工程库/
+│   ├── 工程参照/<项目名>/工程清单.md
+│   ├── 工程参照/<项目名>/模块索引.json
+│   └── 模板候选/README.md
+└── Obsidian嵌入式知识库/
+    ├── README.md
+    ├── 00-首页与导航/
+    │   ├── 项目导航.md
+    │   ├── 工程库导航.md
+    │   └── 模块导航.md
+    ├── 20-芯片与开发板/
+    ├── 60-可复用代码与工程模板/
+    ├── 80-项目与实验记录/
+    ├── 98-资料索引/
+    └── 99-待确认.md
 ```
 
-生成后先读：
+### 工程库职责
+
+工程库不自动复制代码，更不从原工程剪切代码。它集中保存：
+
+- 工程入口、构建入口和模块机器清单；
+- 每个模块候选的源文件、SHA256、API、函数名和 include 依赖；
+- 后续抽取为真正模板前的迁移门槛。
+
+只有用户明确要求并批准迁移计划后，才能把确定的模块复制到新的模板候选工程中独立构建。
+
+### 知识库职责
+
+知识库只保留少量互相链接的中心页：
 
 ```text
-00_总览/项目总览.md
-10_嵌入式工程/代码模块索引.md
-60_可复用代码与工程模板/代码模块/
-50_项目记录与验证/验证状态.md
-99_待确认/待确认.md
+README
+ 项目导航
+ 工程库导航
+ 模块导航（聚合表，不逐模块建孤立笔记）
+ 项目总览 / 构建与验证状态
+ 硬件资料与板卡候选
+ 资料清单 / 硬件资料蒸馏任务
+ 待确认
 ```
 
-默认不覆盖已有笔记。只有人工确认差异后，才使用 `--overwrite-generated` 更新自动生成内容。
+不得为每个源码文件自动创建 Markdown。只有真正值得长期沉淀、已明确接口和适用边界、或有构建/上板证据的模块，才由 Agent 在用户同意后建立独立模块笔记。
 
-## 三、把现有代码变成 AI 可读的模块参照
+## 三、让 AI 参照现有工程，而不是猜代码
 
-每个识别模块都应生成一张模块卡，而不是只在“源码文件清单”中出现。模块卡必须包含：
+从 `00-首页与导航/模块导航.md` 开始。该页按模块类型聚合列出：
 
-```yaml
-type: 代码模块
-source_files: [原工程相对路径]
-module_type: 驱动/算法/协议/控制/应用入口/厂商依赖/待确认
-interfaces: [从头文件获得的 API 候选]
-verified_compile: false
-verified_hardware: false
-trust_level: L0
-reuse_status: 候选/仅供参照/待确认
+- 模块候选名称；
+- 原工程 `.h/.c/.cpp/.py` 相对链接；
+- 函数/API 候选；
+- 当前复用边界。
+
+AI 的阅读顺序必须是：
+
+```text
+模块导航
+ 原工程头文件
+ 原工程实现文件
+ 调用方
+ 构建/芯片配置
+ 硬件资料和验证记录
 ```
 
-模块卡的正文必须提供：
+对候选模块，只能先生成"抽取计划"：公共 API、数据所有权、全局变量、中断/任务上下文、HAL/BSP、PinMux、初始化顺序、安全状态和独立构建方法。不要把"扫描到模块"写成"可直接复用"。
 
-1. 原工程 `.h`、实现文件和调用方的相对链接；
-2. 从头文件提取的公共 API 候选、关键宏/数据结构和直接 `#include` 依赖；
-3. 函数定义候选，用于快速定位实现；
-4. AI 阅读顺序：**头文件 → 实现 → 调用方 → 构建/芯片配置 → 硬件资料**；
-5. 复用边界：全局变量、中断/任务上下文、HAL/BSP、PinMux、初始化顺序、异常安全状态和项目专用耦合；
-6. 验证边界：现有工程的代码不能自动升级为独立模块已构建、已上板或可稳定复用。
+详细规则见 `references/module-extraction.md`。
 
-### 模块分类与抽取规则
+## 四、主动蒸馏项目内硬件资料
 
-- `.c/.h`、`.cpp/.hpp` 或同功能脚本形成一个候选模块；名字冲突、跨目录多实现或职责不清时标记“待确认”。
-- `main.*`、顶层状态机、项目初始化属于**项目编排**：可供 AI 理解调用关系，但不默认迁移。
-- `Drivers/`、`Startup/`、SDK、CMSIS、HAL、自动生成文件、链接脚本、`.ioc`、`.syscfg` 和 IDE 核心配置属于**受保护依赖**：只记录边界，不擅自拆分或复制。
-- 只有明确公共 API、可分离依赖、最小构建条件和验证计划后，才能把“候选模块”迁入真正模板仓库。
-- 不将整个源码文件夹复制进知识库；如需跨环境交接，连同原工程一并交付，或只摘录必要的 API/关键片段并标注 SHA256 与来源。
+不能只列出 PDF 文件名。扫描后必须进入：
 
-详细约束见 `references/module-extraction.md`。
-
-## 四、手册转换与板卡蒸馏
-
-只处理与当前项目或已选硬件直接相关的 PDF、DOCX、PPTX、XLSX、HTML 等资料；不要批量转换整个资料盘。
-
-1. 在资料索引中记录来源路径、版本、用途和转换范围。
-2. 优先使用可访问的 `document-to-markdown` Skill。它需要 Docker 或 Podman；拉取镜像或启动容器前先征得用户同意。
-3. 随附脚本只转换明确选中的资料：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/convert_selected_documents.ps1 `
-  -InputFile <资料1>, <资料2> `
-  -OutputDirectory <PROJECT_ROOT>\Obsidian嵌入式知识库\98_资料索引\转换稿 `
-  -ProjectRoot <PROJECT_ROOT>
+```text
+98-资料索引/硬件资料蒸馏任务.md
 ```
 
-4. 阅读 `references/board-distillation.md` 后，再生成“开发板主档案 + 芯片 PinMux + 板级接口”三层笔记。
+该页面由扫描器主动列出可能的数据手册、参考手册、开发板用户手册、引脚资料、原理图、PCB 和 BOM，并按优先级排序。
 
-资料转换稿和手册结论默认 L0；原理图缺失时不编造板级连接；资料冲突时保留双方来源并写入待确认。
+执行方法：
 
-## 五、验证与最终报告
+1. 优先读取高优先级硬件资料；中优先级资料先读取标题、目录和正文确认类型。
+2. 对 PDF、DOCX、PPTX、XLSX、HTML 等调用可访问的 `document-to-markdown` Skill；转换前确认 Docker/Podman 可用，涉及拉取镜像或运行容器时先征求用户许可。
+3. 将转换稿写入 `98-资料索引/转换稿/`，原始资料保持不动。
+4. **主动阅读转换稿**，从正文、表格、页码和版本中提取事实；不要仅根据文件名蒸馏。
+5. 资料足够时，按需创建并互链：
 
-创建后检查：
+```text
+20-芯片与开发板/<芯片型号>-芯片资源与PinMux速查.md
+20-芯片与开发板/<板卡名><芯片型号>开发板档案.md
+20-芯片与开发板/<板卡名>-板级引脚与接口.md
+```
 
-1. Markdown 可读取、YAML 可解析、Obsidian 内部链接指向存在的笔记；
-2. 模块卡均能链接到原工程文件，且没有把完整源码无差别复制进知识库；
-3. 所有技术栈、硬件参数、验证结果都有来源；无来源项进入 `99_待确认`；
-4. 对比原工程 Git 状态或文件哈希，确认仅新增知识库；
-5. 不擅自构建。只有项目自带命令明确安全且不修改源码/配置时，才在用户授权后执行一次构建，并将结果记录为 L1，不等同于上板。
+6. 每条关键结论写 `source_path`、资料版本、页码/章节、`trust_level: L0` 和待确认项。
 
-最终用简体中文说明：项目根目录、知识库位置、读取的文件、识别的技术栈和模块、创建的笔记、链接关系、资料转换、是否构建、L0/L1/L2/L3 证据、未验证项、待确认项、原工程是否改动，以及如何回退（删除新建知识库目录即可）。
+若文档无法转换、是扫描件、缺少型号，或 Docker/Podman 不可用，明确记录"缺失，需手动实现"或解析限制；不要编造芯片和板卡档案。
+
+板卡蒸馏的三层结构、来源优先级和冲突处理见 `references/board-distillation.md`。
+
+## 五、验证与完成报告
+
+生成后检查：
+
+1. 知识库链接全部指向存在的笔记或真实工程/工程库文件；
+2. 知识库没有完整源码副本和大量无入口孤立笔记；
+3. 每个中心页能回到 `README.md` 或相邻导航页；
+4. 原工程 Git 状态或文件哈希保持不变；
+5. 资料、模块和验证结论均有来源；未知项进入 `99-待确认.md`；
+6. 不擅自构建。获得授权且项目命令安全时，才执行一次项目自身构建并记录 L1。
+
+最终用简体中文说明：项目根目录、双库位置、读取的项目文件、识别的技术栈、聚合模块、主动蒸馏的资料、创建的芯片/板卡档案、构建/上板证据、待确认项、原工程改动情况与回退方式。
 
 ## 附带资源
 
-- `scripts/build_project_inventory.py`：只读工程盘点，创建不覆盖的知识库骨架、模块索引和模块卡。
+- `scripts/build_project_inventory.py`：只读扫描并生成双库的聚合入口与工程模块清单。
 - `scripts/convert_selected_documents.ps1`：通过 Docker 或 Podman 转换明确选中的资料。
-- `references/project-kb-construction.md`：项目自适应知识库的输出契约。
-- `references/module-extraction.md`：现有工程转模块参照的规则。
+- `references/project-kb-construction.md`：双库职责、核心笔记和证据契约。
+- `references/module-extraction.md`：现有工程参照与后续模板抽取规则。
 - `references/board-distillation.md`：芯片、开发板和 PinMux 蒸馏约束。
